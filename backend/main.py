@@ -1,12 +1,13 @@
+# ----------------------------------------------------Imports--------------------------------------------------------------
+
 import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from langchain.chains import LLMChain
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import OpenAI
+from langchain_openai import ChatOpenAI
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -15,17 +16,15 @@ import json
 import io
 from pydantic import BaseModel
 
-# Load environment variables
+# Load environment variables (Contains the openAI API Key).
 load_dotenv()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-instruct")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
-if not OPENAI_KEY:
-    raise RuntimeError("OPENAI_API_KEY not set in .env file")
-
+#Initialize the FastAPI backend.
 app = FastAPI()
 
-# Middleware for CORS
+# Middleware for CORS (Used to enable the frontend origin side to connect the backend side)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,9 +33,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Serve the React build ---
+# ---------------------------------------------------- Serve the React build -----------------------------------------------------
+
+# Static folder in the forntend side is the folder to be traced by the backend as it contains the JS and CSS files.
 app.mount("/static", StaticFiles(directory="build/static"), name="static")
 
+
+# When a user visits any route not matching an API endpoints, it returns the React index.html file (Single Page Application routing).
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
     file_path = os.path.join("build", full_path)
@@ -45,7 +48,9 @@ async def serve_react_app(full_path: str):
     return FileResponse(os.path.join("build", "index.html"))
 
 
-# --- AI ROUTE: Generate BMC ---
+# --------------------------------------------------- AI ROUTE: Generate BMC ----------------------------------------------------
+
+#Takes a text file, sends it to OpenAI, gets back a Business Model Canvas, cleans it up, and returns the result
 @app.post("/api/generate_bmc")
 async def generate_bmc(file: UploadFile = File(...)):
     try:
@@ -55,42 +60,117 @@ async def generate_bmc(file: UploadFile = File(...)):
         # Read file content
         content = (await file.read()).decode("utf-8")
 
-        # Prepare AI prompt
+        # The AI prompt
         prompt = PromptTemplate(
             input_variables=["project_description"],
             template=(
-                "You are an expert business analyst. Based on the following project description, "
-                "generate a **Business Model Canvas** as valid JSON only, Each section should be written in full, descriptive sentences (not bullet points) "
-                "Use exactly these keys:\n\n"
+                "Create a Business Model Canvas JSON.\n"
+                "Project: {project_description}\n\n"
+                "Return valid JSON with exactly these 9 keys, each value is a single string with 3 sentences:\n"
                 "Key Partners, Key Activities, Value Propositions, Customer Relationships, "
-                "Each key must contain multiple points (each on a new line or separated by periods). "
-                "Each point must start with an uppercase letter and form a full, meaningful sentence.\n\n"
                 "Customer Segments, Key Resources, Channels, Cost Structure, Revenue Streams.\n\n"
-                "Project Description:\n{project_description}\n\n"
-                "Output ONLY valid JSON"
+                "JSON only, no other text:"
             )
         )
 
-        llm = OpenAI(temperature=0.3, openai_api_key=OPENAI_KEY, model="gpt-3.5-turbo-instruct")
-        chain = LLMChain(prompt=prompt, llm=llm)
-
-        bmc_raw = chain.run({"project_description": content})
+        # Temperature is for the response's creativity, 0 for deterministic and 1 for the random.
+        llm = ChatOpenAI(temperature=0.3, api_key=OPENAI_KEY, model=OPENAI_MODEL)
+        chain = prompt | llm
+        
+        response = chain.invoke({"project_description": content})
+        bmc_raw = response.content
 
         # Try parsing as JSON
         try:
             bmc = json.loads(bmc_raw)
-        except Exception:
-            bmc = {"raw_output": bmc_raw.strip()}
+        except Exception as json_error:
+            # If JSON parsing fails, try to extract JSON from the response
+            import re
+            json_match = re.search(r'\{.*\}', bmc_raw, re.DOTALL)
+            if json_match:
+                try:
+                    bmc = json.loads(json_match.group())
+                except:
+                    bmc = {"raw_output": bmc_raw.strip()}
+            else:
+                bmc = {"raw_output": bmc_raw.strip()}
         
-        # Ensure all 9 BMC keys exist
+        # Clean and validate each section
+        def clean_section(section_value):
+            if not section_value or section_value == "—":
+                return "—"
+            
+            import re
+            
+            # Handle if it's a dict or list
+            if isinstance(section_value, dict):
+                # Convert dict to string representation
+                text = ' '.join([str(v) for v in section_value.values()])
+            elif isinstance(section_value, list):
+                # Join list items
+                text = ' '.join([str(item) for item in section_value])
+            else:
+                text = str(section_value)
+            
+            # Remove any remaining dict/list syntax
+            text = re.sub(r"[{}'\[\]]", '', text)
+            text = re.sub(r':\s*', ': ', text)
+            
+            # Split by periods, newlines, semicolons, or commas
+            sentences = re.split(r'[.,;\n]+', text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            cleaned_points = []
+            
+            for sent in sentences:
+                # Remove bullet points and dashes
+                sent = re.sub(r'^[\s•\-\*0-9]+\.?\s*', '', sent).strip()
+                
+                # Skip very short sentences
+                if len(sent) < 15:
+                    continue
+                
+                # Skip if starts with conjunctions
+                if sent.lower().startswith(('and ', 'or ', 'but ', 'the ', 'a ', 'an ')):
+                    # Try to remove the conjunction and keep the rest
+                    words = sent.split()
+                    if len(words) > 2:
+                        sent = ' '.join(words[1:])
+                    else:
+                        continue
+                
+                # Capitalize first letter
+                if sent:
+                    sent = sent[0].upper() + sent[1:]
+                    
+                    # Ensure it ends with period
+                    if not sent.endswith(('.', '!', '?')):
+                        sent += '.'
+                    
+                    cleaned_points.append(sent)
+            
+            # Only add synthetic points if we have very few real ones (less than 3)
+            if len(cleaned_points) < 3:
+                base_length = len(cleaned_points)
+                for i in range(3 - base_length):
+                    cleaned_points.append(f"Strategic element {i+1} supporting business model implementation.")
+            
+            # Limit to 6 points and join with newlines
+            return '\n'.join(cleaned_points[:6])
+        
+        # Apply cleaning to all sections
         keys = [
             "Key Partners", "Key Activities", "Value Propositions",
             "Customer Relationships", "Customer Segments",
             "Key Resources", "Channels", "Cost Structure", "Revenue Streams"
-        ]    
+        ]
+        
         for key in keys:
-            if key not in bmc:
+            if key in bmc:
+                bmc[key] = clean_section(bmc[key])
+            else:
                 bmc[key] = "—"
+
         
         return {"business_model_canvas": bmc}
 
@@ -98,12 +178,12 @@ async def generate_bmc(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- PowerPoint Export Model ---
+# -------------------------------------------------------PowerPoint Export Model-------------------------------------------------
 class BMCExportRequest(BaseModel):
     bmc: dict
 
 
-# --- PowerPoint Export Route ---
+# ------------------------------------------------------PowerPoint Export Route---------------------------------------------
 @app.post("/api/export_ppt")
 async def export_ppt(request: BMCExportRequest):
     try:
@@ -143,13 +223,15 @@ async def export_ppt(request: BMCExportRequest):
             box.fill.fore_color.rgb = RGBColor(*color)
             box.line.color.rgb = RGBColor(0, 0, 0)
             box.line.width = Pt(2)
+            box.line.fill.solid()
             
             text_frame = box.text_frame
-            text_frame.margin_top = Inches(0.1)
+            text_frame.margin_top = Inches(0.15)
             text_frame.margin_left = Inches(0.1)
             text_frame.margin_right = Inches(0.1)
             text_frame.margin_bottom = Inches(0.1)
             text_frame.word_wrap = True
+            text_frame.vertical_anchor = 1  # Top alignment
             
             # Add title
             p = text_frame.paragraphs[0]
@@ -157,6 +239,7 @@ async def export_ppt(request: BMCExportRequest):
             p.font.size = Pt(14)
             p.font.bold = True
             p.font.color.rgb = RGBColor(0, 0, 0)
+            p.space_after = Pt(8)
             
             # Add content - handle both string and list formats
             if isinstance(content, list):
@@ -167,15 +250,17 @@ async def export_ppt(request: BMCExportRequest):
                         p.font.size = Pt(10)
                         p.font.color.rgb = RGBColor(0, 0, 0)
                         p.level = 0
+                        p.space_after = Pt(4)
             else:
                 content_items = str(content).split('\n') if content else ["—"]
                 for item in content_items:
                     if item.strip():
                         p = text_frame.add_paragraph()
-                        p.text = "• " + item.strip().capitalize()
+                        p.text = "• " + item.strip()
                         p.font.size = Pt(10)
                         p.font.color.rgb = RGBColor(0, 0, 0)
                         p.level = 0
+                        p.space_after = Pt(4)
         
         # Define light pastel colors for each section
         colors = {
@@ -237,10 +322,8 @@ async def export_ppt(request: BMCExportRequest):
         return StreamingResponse(
             ppt_stream,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": "attachment; filename=business_model_canvas.pptx"}
+            headers={"Content-Disposition": "attachment; filename=BMC.pptx"}
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
