@@ -1,12 +1,11 @@
-import React, { useState, useCallback } from "react";
-import { Link, Users, CheckSquare, Gift, Heart, Layers, Truck, DollarSign, Tag, Plus, X, FileDown, Presentation } from "lucide-react";
+import React, { useState } from "react";
+import { Link, Users, CheckSquare, Gift, Heart, Layers, Truck, DollarSign, Tag, Plus, X, Presentation } from "lucide-react";
 import "./App.css";
 
 function App() {
   const [file, setFile] = useState(null);
   const [bmc, setBmc] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [newItems, setNewItems] = useState({});
 
   const handleFileChange = (e) => setFile(e.target.files[0]);
 
@@ -29,18 +28,15 @@ function App() {
 
       const data = await res.json();
       
-      // Convert string responses to arrays of points
       const processedBmc = {};
       Object.keys(data.business_model_canvas).forEach(key => {
         const value = data.business_model_canvas[key];
         if (typeof value === 'string') {
-          // Split by common delimiters and filter empty strings
           processedBmc[key] = value
             .split(/\n|•|-|,/)
             .map(item => item.trim())
             .filter(item => item && item !== '—');
           
-          // If no points found, add placeholder
           if (processedBmc[key].length === 0) {
             processedBmc[key] = ['No data available'];
           }
@@ -58,14 +54,12 @@ function App() {
     }
   };
 
-  const addPoint = (section) => {
-    const newPoint = newItems[section]?.trim();
-    if (newPoint && bmc) {
+  const addPoint = (section, point) => {
+    if (point.trim() && bmc) {
       setBmc({
         ...bmc,
-        [section]: [...bmc[section], newPoint]
+        [section]: [...bmc[section], point.trim()]
       });
-      setNewItems(prev => ({ ...prev, [section]: '' }));
     }
   };
 
@@ -109,13 +103,16 @@ function App() {
     }
   };
 
-  const handleInputChange = (section, value) => {
-    setNewItems(prev => ({ ...prev, [section]: value }));
-  };
-
-  const BMCSection = React.memo(({ title, icon: Icon, section, data }) => {
-    const inputValue = newItems[section] || '';
+  const BMCSection = ({ title, icon: Icon, section, data }) => {
+    const [inputValue, setInputValue] = useState('');
     
+    const handleAdd = () => {
+      if (inputValue.trim()) {
+        addPoint(section, inputValue);
+        setInputValue('');
+      }
+    };
+
     return (
       <div className="bmc-box">
         <div className="box-header">
@@ -131,6 +128,7 @@ function App() {
                   className="remove-btn"
                   onClick={() => removePoint(section, idx)}
                   title="Remove point"
+                  type="button"
                 >
                   <X size={14} />
                 </button>
@@ -143,26 +141,27 @@ function App() {
             type="text"
             placeholder="Add new point..."
             value={inputValue}
-            onChange={(e) => handleInputChange(section, e.target.value)}
-            onKeyPress={(e) => {
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                addPoint(section);
+                handleAdd();
               }
             }}
             className="add-point-input"
           />
           <button
             className="add-point-btn"
-            onClick={() => addPoint(section)}
+            onClick={handleAdd}
             title="Add point"
+            type="button"
           >
             <Plus size={18} />
           </button>
         </div>
       </div>
     );
-  });
+  };
 
   return (
     <div className="app">
@@ -177,11 +176,10 @@ function App() {
 
       {bmc && (
         <div className="canvas-wrapper">
-          {/* Header with title and export buttons */}
           <div className="canvas-header">
             <h2 className="canvas-title">The Business Model Canvas</h2>
             <div className="export-buttons">
-              <button onClick={exportToPowerPoint} className="export-btn ppt-btn">
+              <button onClick={exportToPowerPoint} className="export-btn ppt-btn" type="button">
                 <Presentation size={18} />
                 Export to PowerPoint
               </button>
@@ -189,7 +187,6 @@ function App() {
           </div>
 
           <div className="bmc-container">
-            {/* TOP ROW */}
             <div className="bmc-row top-row">
               <BMCSection
                 title="Key Partners"
@@ -243,7 +240,6 @@ function App() {
               />
             </div>
 
-            {/* BOTTOM ROW */}
             <div className="bmc-row bottom-row">
               <BMCSection
                 title="Cost Structure"
