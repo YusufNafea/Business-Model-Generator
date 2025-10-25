@@ -14,4 +14,5 @@
 (Purpose):
 - Designed for entrepreneurs, students, and professionals to quickly turn business ideas into structured, presentable Business Model Canvases — saving hours of manual   analysis and formatting.
 
-<img width="990" height="977" alt="deepseek_mermaid_20251017_324646" src="https://github.com/user-attachments/assets/cceeb337-1411-47df-af82-0b4963997bec" />
+<img width="990" height="964" alt="Project Architecture" src="https://github.com/user-attachments/assets/e2bbac32-9713-4870-98eb-6f2ed1ac9e67" />
+
